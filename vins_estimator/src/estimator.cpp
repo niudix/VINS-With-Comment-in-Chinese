@@ -157,6 +157,7 @@ void Estimator::processImage(const map<int, vector<pair<int, Eigen::Matrix<doubl
         {
             vector<pair<Vector3d, Vector3d>> corres = f_manager.getCorresponding(frame_count - 1, frame_count);
             Matrix3d calib_ric;
+            //进行外参初始化
             if (initial_ex_rotation.CalibrationExRotation(corres, pre_integrations[frame_count]->delta_q, calib_ric))
             {
                 ROS_WARN("initial extrinsic rotation calib success");
@@ -301,13 +302,14 @@ bool Estimator::initialStructure()
     Vector3d relative_T;
     int l;
     //这个函数是关键，求解枢纽帧和最后一帧的R和T,l是枢纽帧的索引
-    //这个函数只有入参，没有返回值
+    //这个函数只有入参，没有返回值（进入这个函数查看)
     if (!relativePose(relative_R, relative_T, l))
     {
         ROS_INFO("Not enough features or parallax; Move device around");
         return false;
     }
     GlobalSFM sfm;
+    //进行三角化
     if(!sfm.construct(frame_count + 1, Q, T, l,
               relative_R, relative_T,
               sfm_f, sfm_tracked_points))

@@ -2,6 +2,14 @@
 
 GlobalSFM::GlobalSFM(){}
 
+/***
+ * @brief 对两帧提取到的某个点进行三角化
+ * @param Pose0[in] 前一帧的pose（相机对世界系的pose）
+ * @param Pose1[in] 后一帧的pose（相机对世界系的pose）
+ * @param Point0[in] 在前一帧的观测
+ * @param Point1[in] 在后一帧的观测
+ * @param point_3d[out] 三角化的结果
+*/
 void GlobalSFM::triangulatePoint(Eigen::Matrix<double, 3, 4> &Pose0, Eigen::Matrix<double, 3, 4> &Pose1,
 						Vector2d &point0, Vector2d &point1, Vector3d &point_3d)
 {
@@ -70,35 +78,47 @@ bool GlobalSFM::solveFrameByPnP(Matrix3d &R_initial, Vector3d &P_initial, int i,
 	return true;
 
 }
-
+/**
+ * @brief 根据量帧索引和位姿计算出特征点的三角化位置
+ * @param frame0: 前一帧（关键帧）的索引
+ * @param Pose0: 前一帧（关键帧）的位姿
+ * @param Pose1: 后一帧（最后一帧）的索引
+ * 
+*/
 void GlobalSFM::triangulateTwoFrames(int frame0, Eigen::Matrix<double, 3, 4> &Pose0, 
 									 int frame1, Eigen::Matrix<double, 3, 4> &Pose1,
 									 vector<SFMFeature> &sfm_f)
-{
+{	
+	//首先判断两帧是否相同（相同则不能三角化）
 	assert(frame0 != frame1);
 	for (int j = 0; j < feature_num; j++)
-	{
+	{	//通过标志位判断是否已经进行了三角化，如果已经进行了三角化标志位为true
 		if (sfm_f[j].state == true)
 			continue;
 		bool has_0 = false, has_1 = false;
 		Vector2d point0;
 		Vector2d point1;
+		//遍历所有的特征点
 		for (int k = 0; k < (int)sfm_f[j].observation.size(); k++)
 		{
+			//是否被第0帧观测到
 			if (sfm_f[j].observation[k].first == frame0)
 			{
 				point0 = sfm_f[j].observation[k].second;
 				has_0 = true;
 			}
+			//是否被第1帧观测到
 			if (sfm_f[j].observation[k].first == frame1)
 			{
 				point1 = sfm_f[j].observation[k].second;
 				has_1 = true;
 			}
 		}
+		//如果一个特征点被两帧都观测到了则可以进行三角化
 		if (has_0 && has_1)
 		{
 			Vector3d point_3d;
+			//进行三角化的函数
 			triangulatePoint(Pose0, Pose1, point0, point1, point_3d);
 			sfm_f[j].state = true;
 			sfm_f[j].position[0] = point_3d(0);
@@ -114,6 +134,8 @@ void GlobalSFM::triangulateTwoFrames(int frame0, Eigen::Matrix<double, 3, 4> &Po
 //  c_translation cam_R_w
 // relative_q[i][j]  j_q_i
 // relative_t[i][j]  j_t_ji  (j < i)
+//进行三角化的过程
+//l是关键帧索引
 bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 			  const Matrix3d relative_R, const Vector3d relative_T,
 			  vector<SFMFeature> &sfm_f, map<int, Vector3d> &sfm_tracked_points)
@@ -122,11 +144,13 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 	//cout << "set 0 and " << l << " as known " << endl;
 	// have relative_r relative_t
 	// intial two view
+	//开始的初始状态设置为单位四元数
 	q[l].w() = 1;
 	q[l].x() = 0;
 	q[l].y() = 0;
 	q[l].z() = 0;
 	T[l].setZero();
+	//旋转矩阵求出当前相机的位姿
 	q[frame_num - 1] = q[l] * Quaterniond(relative_R);
 	T[frame_num - 1] = relative_T;
 	//cout << "init q_l " << q[l].w() << " " << q[l].vec().transpose() << endl;
@@ -140,12 +164,15 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 	double c_translation[frame_num][3];
 	Eigen::Matrix<double, 3, 4> Pose[frame_num];
 
+	//关键帧的tcw
+	//把twc 转化为tcw (world to camera 转化为 camera to world)
 	c_Quat[l] = q[l].inverse();
 	c_Rotation[l] = c_Quat[l].toRotationMatrix();
 	c_Translation[l] = -1 * (c_Rotation[l] * T[l]);
 	Pose[l].block<3, 3>(0, 0) = c_Rotation[l];
 	Pose[l].block<3, 1>(0, 3) = c_Translation[l];
 
+	//最后一帧的tcw
 	c_Quat[frame_num - 1] = q[frame_num - 1].inverse();
 	c_Rotation[frame_num - 1] = c_Quat[frame_num - 1].toRotationMatrix();
 	c_Translation[frame_num - 1] = -1 * (c_Rotation[frame_num - 1] * T[frame_num - 1]);
@@ -155,11 +182,13 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 
 	//1: trangulate between l ----- frame_num - 1
 	//2: solve pnp l + 1; trangulate l + 1 ------- frame_num - 1; 
+	//求解关键帧和最后一帧两帧中间的pnp
 	for (int i = l; i < frame_num - 1 ; i++)
 	{
 		// solve pnp
 		if (i > l)
 		{
+			//R_initial和P_initial均代表了前一帧的tcw的旋转矩阵
 			Matrix3d R_initial = c_Rotation[i - 1];
 			Vector3d P_initial = c_Translation[i - 1];
 			if(!solveFrameByPnP(R_initial, P_initial, i, sfm_f))
@@ -172,6 +201,8 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 		}
 
 		// triangulate point based on the solve pnp result
+		//三角化的参数
+		//第i帧索引，第i帧的位姿；最后一帧索引，最后一帧位姿
 		triangulateTwoFrames(i, Pose[i], frame_num - 1, Pose[frame_num - 1], sfm_f);
 	}
 	//3: triangulate l-----l+1 l+2 ... frame_num -2

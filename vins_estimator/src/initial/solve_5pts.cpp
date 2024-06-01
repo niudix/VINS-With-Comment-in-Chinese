@@ -188,6 +188,14 @@ namespace cv {
         return cv::recoverPose(E, _points1, _points2, cameraMatrix, _R, _t, _mask);
     }
 }
+/*
+* @brief 根据两帧匹配对求解出R和t
+*
+* @param [in] corres 关键点的匹配对
+* @param [in] Rotation 入参为空，返回计算好的旋转
+* @param [in] Translation 入参为空，返回为计算好的平移
+* @return ture/false
+*/
 
 //通过两帧图片和关键点的坐标求出相对位姿（对极约束）
 bool MotionEstimator::solveRelativeRT(const vector<pair<Vector3d, Vector3d>> &corres, Matrix3d &Rotation, Vector3d &Translation)
@@ -203,12 +211,16 @@ bool MotionEstimator::solveRelativeRT(const vector<pair<Vector3d, Vector3d>> &co
             rr.push_back(cv::Point2f(corres[i].second(0), corres[i].second(1)));
         }
         cv::Mat mask;
+        //用opencv求出本质矩阵
         cv::Mat E = cv::findFundamentalMat(ll, rr, cv::FM_RANSAC, 0.3 / 460, 0.99, mask);
+        //初始位姿直接设为单位矩阵
         cv::Mat cameraMatrix = (cv::Mat_<double>(3, 3) << 1, 0, 0, 0, 1, 0, 0, 0, 1);
         cv::Mat rot, trans;
+        //用opencv直接计算出位姿变换
         int inlier_cnt = cv::recoverPose(E, ll, rr, cameraMatrix, rot, trans, mask);
         //cout << "inlier_cnt " << inlier_cnt << endl;
 
+        //opencv的矩阵转化为Eigen
         Eigen::Matrix3d R;
         Eigen::Vector3d T;
         for (int i = 0; i < 3; i++)
