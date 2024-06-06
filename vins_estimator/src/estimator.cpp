@@ -319,7 +319,7 @@ bool Estimator::initialStructure()
         return false;
     }
 
-    //solve pnp for all frame
+    //step 3: 求的关键帧的结果后，求解出所有帧的位姿
     map<double, ImageFrame>::iterator frame_it;
     map<int, Vector3d>::iterator it;
     frame_it = all_image_frame.begin( );
@@ -409,7 +409,7 @@ bool Estimator::visualInitialAlign()
         return false;
     }
 
-    // change state
+    // Step4: 视觉惯性对齐
     for (int i = 0; i <= frame_count; i++)
     {
         Matrix3d Ri = all_image_frame[Headers[i].stamp.toSec()].R;

@@ -27,6 +27,7 @@ void GlobalSFM::triangulatePoint(Eigen::Matrix<double, 3, 4> &Pose0, Eigen::Matr
 }
 
 
+//求解pnp
 bool GlobalSFM::solveFrameByPnP(Matrix3d &R_initial, Vector3d &P_initial, int i,
 								vector<SFMFeature> &sfm_f)
 {
@@ -34,11 +35,13 @@ bool GlobalSFM::solveFrameByPnP(Matrix3d &R_initial, Vector3d &P_initial, int i,
 	vector<cv::Point3f> pts_3_vector;
 	for (int j = 0; j < feature_num; j++)
 	{
+		//判断点是否进行了三角化，只有进行了三角化后才能求解pnp
 		if (sfm_f[j].state != true)
 			continue;
 		Vector2d point2d;
 		for (int k = 0; k < (int)sfm_f[j].observation.size(); k++)
 		{
+			//把在下一帧可以观测到，且已经三角化的3D点全部提取出来
 			if (sfm_f[j].observation[k].first == i)
 			{
 				Vector2d img_pts = sfm_f[j].observation[k].second;
@@ -50,6 +53,7 @@ bool GlobalSFM::solveFrameByPnP(Matrix3d &R_initial, Vector3d &P_initial, int i,
 			}
 		}
 	}
+	//如果已经三角化的3D点小于15个则认为无法进行pnp
 	if (int(pts_2_vector.size()) < 15)
 	{
 		printf("unstable features tracking, please slowly move you device!\n");
@@ -186,6 +190,7 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 	for (int i = l; i < frame_num - 1 ; i++)
 	{
 		// solve pnp
+		// 现在已经知道了点的3D位置，现在通过3D坐标反解出其他图像帧的位姿
 		if (i > l)
 		{
 			//R_initial和P_initial均代表了前一帧的tcw的旋转矩阵
@@ -261,47 +266,59 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 	}
 */
 	//full BA
+	//Step5: 进行Globa BA(优化出重投影位姿误差最小的值)
 	ceres::Problem problem;
 	ceres::LocalParameterization* local_parameterization = new ceres::QuaternionParameterization();
 	//cout << " begin full BA " << endl;
 	for (int i = 0; i < frame_num; i++)
 	{
 		//double array for ceres
+		//待优化的优化量
+		//ceres解优化问题必须要从Eigen转化为数组
+		//c_translation 平移量
 		c_translation[i][0] = c_Translation[i].x();
 		c_translation[i][1] = c_Translation[i].y();
 		c_translation[i][2] = c_Translation[i].z();
+		//四元数转为数组
 		c_rotation[i][0] = c_Quat[i].w();
 		c_rotation[i][1] = c_Quat[i].x();
 		c_rotation[i][2] = c_Quat[i].y();
 		c_rotation[i][3] = c_Quat[i].z();
+		//四元数的开始指针，四元数的长度，四元数的加法方式
 		problem.AddParameterBlock(c_rotation[i], 4, local_parameterization);
 		problem.AddParameterBlock(c_translation[i], 3);
+		//枢纽帧的旋转和平移不做改变（这是帧间约束），也就是说不然其他帧一动会整体漂移，没有意义
 		if (i == l)
 		{
+			//定义不改变的参数块
 			problem.SetParameterBlockConstant(c_rotation[i]);
 		}
+		//固定了最后一帧的平移（保证单目slam的尺度不变）
 		if (i == l || i == frame_num - 1)
 		{
 			problem.SetParameterBlockConstant(c_translation[i]);
 		}
 	}
-
+	//构造优化问题,遍历所有帧，构建约束
 	for (int i = 0; i < feature_num; i++)
 	{
+		//首先必须要确保3D点都三角化了
 		if (sfm_f[i].state != true)
 			continue;
 		for (int j = 0; j < int(sfm_f[i].observation.size()); j++)
 		{
 			int l = sfm_f[i].observation[j].first;
+			//创建残差函数（这个是Cerese提供的函数）
 			ceres::CostFunction* cost_function = ReprojectionError3D::Create(
 												sfm_f[i].observation[j].second.x(),
 												sfm_f[i].observation[j].second.y());
-
+			//残差函数，核函数，第l帧的旋转和平移，第i帧的3D坐标
     		problem.AddResidualBlock(cost_function, NULL, c_rotation[l], c_translation[l], 
     								sfm_f[i].position);	 
 		}
 
 	}
+	//让ceres自动去求导
 	ceres::Solver::Options options;
 	options.linear_solver_type = ceres::DENSE_SCHUR;
 	//options.minimizer_progress_to_stdout = true;
@@ -309,6 +326,7 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 	ceres::Solver::Summary summary;
 	ceres::Solve(options, &problem, &summary);
 	//std::cout << summary.BriefReport() << "\n";
+	//结束求解，验证结束的原因是因为收敛还是超时
 	if (summary.termination_type == ceres::CONVERGENCE || summary.final_cost < 5e-03)
 	{
 		//cout << "vision only BA converge" << endl;
@@ -318,12 +336,14 @@ bool GlobalSFM::construct(int frame_num, Quaterniond* q, Vector3d* T, int l,
 		//cout << "vision only BA not converge " << endl;
 		return false;
 	}
+	//结束优化把double转化为Eigen
 	for (int i = 0; i < frame_num; i++)
 	{
 		q[i].w() = c_rotation[i][0]; 
 		q[i].x() = c_rotation[i][1]; 
 		q[i].y() = c_rotation[i][2]; 
 		q[i].z() = c_rotation[i][3]; 
+		//把Tcw转化为Twc
 		q[i] = q[i].inverse();
 		//cout << "final  q" << " i " << i <<"  " <<q[i].w() << "  " << q[i].vec().transpose() << endl;
 	}
